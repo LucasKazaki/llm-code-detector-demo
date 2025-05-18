@@ -131,7 +131,7 @@
       updateProgress(1, 'Initializing ONNX Runtime...');
       try {
         session = await ort.InferenceSession.create(
-          'https://github.com/LucasKazaki/llm-code-detector-demo/releases/download/v1.1/model.onnx',
+          'https://github.com/LucasKazaki/llm-code-detector-demo/releases/download/v1.0/model.onnx',
           { executionProviders: ['wasm','webgl','cpu'] }
         );
         updateProgress(1, 'Model loaded successfully');
