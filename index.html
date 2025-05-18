@@ -1,0 +1,201 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>LLM vs Human Code Detector</title>
+  <script src="https://cdn.jsdelivr.net/npm/onnxruntime-web/dist/ort.min.js"></script>
+  <style>
+    body {
+      font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+      background: #f0f2f5;
+      margin: 0; padding: 0;
+    }
+    .container {
+      max-width: 800px;
+      margin: 2rem auto;
+      background: #fff;
+      padding: 2rem;
+      border-radius: 8px;
+      box-shadow: 0 2px 8px rgba(0,0,0,0.1);
+    }
+    h1 {
+      margin-bottom: 0.5rem;
+      color: #333;
+    }
+    .subtitle {
+      margin-top: 0;
+      color: #555;
+      font-size: 0.9rem;
+    }
+    textarea {
+      width: 100%;
+      font-family: monospace;
+      font-size: 0.9rem;
+      margin: 1rem 0;
+      padding: 0.75rem;
+      border: 1px solid #ccc;
+      border-radius: 4px;
+      resize: vertical;
+    }
+    button {
+      padding: 0.75rem 1.5rem;
+      font-size: 1rem;
+      background: #0078d4;
+      color: #fff;
+      border: none;
+      border-radius: 4px;
+      cursor: pointer;
+      transition: background 0.2s;
+    }
+    button:disabled {
+      background: #ccc;
+      cursor: not-allowed;
+    }
+    button:hover:not(:disabled) {
+      background: #005a9e;
+    }
+    #status {
+      margin-top: 1rem;
+      color: #0078d4;
+      font-style: italic;
+    }
+    #output {
+      margin-top: 1rem;
+      background: #f9f9f9;
+      padding: 1rem;
+      border-radius: 4px;
+      font-family: monospace;
+      white-space: pre-wrap;
+      color: #222;
+    }
+    progress {
+      width: 100%;
+      height: 16px;
+      margin-top: 0.5rem;
+      -webkit-appearance: none;
+      appearance: none;
+    }
+    progress::-webkit-progress-bar {
+      background: #eee;
+      border-radius: 4px;
+    }
+    progress::-webkit-progress-value {
+      background: #0078d4;
+      border-radius: 4px;
+    }
+    .footer {
+      margin-top: 2rem;
+      font-size: 0.85rem;
+      color: #666;
+      text-align: center;
+    }
+    .footer a {
+      color: #0078d4;
+      text-decoration: none;
+    }
+    .footer a:hover {
+      text-decoration: underline;
+    }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <h1>LLM vs Human Code Detector</h1>
+    <p class="subtitle">Paste your code snippet below and click <strong>Analyze</strong> when ready.</p>
+    
+    <textarea id="code-input" rows="10" placeholder="Paste code here..."></textarea>
+    <button id="analyze" disabled>Analyze</button>
+    <div id="status">Step 1/5: Waiting to load model...</div>
+    <progress id="progress" value="0" max="5"></progress>
+    <div id="output">Model output will appear here.</div>
+    
+    <div class="footer">
+      <p>Based on: <a href="https://arxiv.org/abs/2412.14611" target="_blank">Gurioli et al. (2024) - Detecting AI-Generated Code</a></p>
+    </div>
+  </div>
+
+  <script>
+    let session;
+    const analyzeBtn = document.getElementById('analyze');
+    const statusEl = document.getElementById('status');
+    const outputEl = document.getElementById('output');
+    const progressBar = document.getElementById('progress');
+
+    function updateProgress(step, text) {
+      if (step >= 1 && step <= 5) progressBar.value = step;
+      statusEl.innerText = `Step ${step}/5: ${text}`;
+    }
+
+    async function initSession() {
+      updateProgress(1, 'Initializing ONNX Runtime...');
+      try {
+        session = await ort.InferenceSession.create('model.onnx', {
+          executionProviders: ['wasm', 'webgl', 'cpu'],
+          graphOptimizationLevel: 'all'
+        });
+        updateProgress(1, 'Model loaded successfully');
+        analyzeBtn.disabled = false;
+      } catch (err) {
+        console.error('Model load error:', err);
+        const msg = err.message.includes('Failed to fetch')
+          ? 'Cannot fetch model; serve via HTTP (python -m http.server)' 
+          : err.message;
+        updateProgress(1, `Failed to load model: ${msg}`);
+      }
+    }
+
+    initSession();
+
+    function softmax(arr) {
+      const maxLogit = Math.max(...arr);
+      const exps = arr.map(x => Math.exp(x - maxLogit));
+      const sum = exps.reduce((a,b) => a+b, 0);
+      return exps.map(e => e/sum);
+    }
+
+    analyzeBtn.addEventListener('click', async () => {
+      analyzeBtn.disabled = true;
+      outputEl.innerText = '';
+
+      // 2: Tokenization
+      updateProgress(2, 'Tokenizing code');
+      const code = document.getElementById('code-input').value;
+      const tokens = code.split(/\W+/).filter(t=>t);
+      const maxLen = 512;
+      const tokenCount = Math.min(tokens.length, maxLen);
+      updateProgress(2, `Tokenized ${tokenCount}/${tokens.length}`);
+
+      // 3: Create Tensor
+      updateProgress(3, 'Creating input tensor');
+      const bigInput = new BigInt64Array(maxLen).fill(0n);
+      tokens.slice(0, maxLen).forEach((t,i)=> bigInput[i]=BigInt(t.length));
+      const tensor = new ort.Tensor('int64', bigInput, [1, maxLen]);
+      updateProgress(3, 'Tensor ready');
+
+      // 4: Inference
+      updateProgress(4, 'Running inference');
+      const t0 = performance.now();
+      let results;
+      try {
+        results = await session.run({ input_ids: tensor });
+      } catch(err) {
+        console.error(err);
+        updateProgress(4, `Inference failed: ${err.message}`);
+        analyzeBtn.disabled = false;
+        return;
+      }
+      const t1 = performance.now();
+      updateProgress(4, `Inference done in ${(t1-t0).toFixed(1)} ms`);
+
+      // 5: Compute and display
+      updateProgress(5, 'Calculating probabilities');
+      const logits = results.logits.data;
+      const probs = softmax(Array.from(logits));
+      outputEl.innerText = `AI-generated: ${(probs[1]*100).toFixed(2)}%\nHuman-written: ${(probs[0]*100).toFixed(2)}%`;
+      updateProgress(5, 'All steps complete');
+      analyzeBtn.disabled = false;
+    });
+  </script>
+</body>
+</html>
