@@ -130,10 +130,11 @@
     async function initSession() {
       updateProgress(1, 'Initializing ONNX Runtime...');
       try {
-        session = await ort.InferenceSession.create(
-          'https://github.com/LucasKazaki/llm-code-detector-demo/releases/download/v1.0/model.onnx',
-          { executionProviders: ['wasm','webgl','cpu'] }
-        );
+        const MODEL_URL = 'https://github.com/LucasKazaki/llm-code-detector-demo/releases/download/v1.0/model.onnx';
+        session = await ort.InferenceSession.create(MODEL_URL, {
+          executionProviders: ['wasm', 'webgl', 'cpu'],
+          graphOptimizationLevel: 'all'
+        });
         updateProgress(1, 'Model loaded successfully');
         analyzeBtn.disabled = false;
       } catch (err) {
